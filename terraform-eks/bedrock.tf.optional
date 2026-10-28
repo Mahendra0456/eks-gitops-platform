@@ -1,0 +1,38 @@
+# OPTIONAL: gives only the incident-analyzer pod permission to call Amazon Bedrock.
+# Use it only in the optional "AI summary" phase of the guide:
+#   mv bedrock.tf.optional bedrock.tf && terraform apply
+# The EKS Pod Identity agent add-on is already installed by main.tf.
+
+resource "aws_iam_role" "analyzer" {
+  name = "ecom-incident-analyzer"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "analyzer_bedrock" {
+  name = "bedrock-invoke"
+  role = aws_iam_role.analyzer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock:InvokeModel"]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "analyzer" {
+  cluster_name    = module.eks.cluster_name
+  namespace       = "monitoring"
+  service_account = "incident-analyzer"
+  role_arn        = aws_iam_role.analyzer.arn
+}

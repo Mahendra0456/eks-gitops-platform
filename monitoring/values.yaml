@@ -1,0 +1,28 @@
+# kube-prometheus-stack values (EKS: control-plane components are not reachable)
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+alertmanager:
+  config:
+    route:
+      receiver: "null"
+      group_by: ["alertname"]
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 30m
+      routes:
+        - receiver: analyzer
+          matchers:
+            - 'alertname=~"HighErrorRate|KubePodCrashLooping|KubePodNotReady"'
+    receivers:
+      - name: "null"
+      - name: analyzer
+        webhook_configs:
+          - url: http://incident-analyzer.monitoring.svc:5000/alert
+            send_resolved: false

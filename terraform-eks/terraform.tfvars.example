@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and edit.
+my_ip_cidr = "YOUR_LAPTOP_IP/32"
+key_name   = "my-newkey"
+node_type  = "m7i-flex.large"
+node_count = 2
+elk_type   = "c7i-flex.large"

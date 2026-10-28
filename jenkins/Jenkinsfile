@@ -1,0 +1,143 @@
+pipeline {
+  agent any
+
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 90, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '15'))
+  }
+
+  // No inbound webhook needed: Jenkins checks GitHub for new commits every ~2 minutes.
+  triggers { pollSCM('H/2 * * * *') }
+
+  environment {
+    IMAGE       = 'mahendra46/ecommerce'
+    TAG         = "${env.BUILD_NUMBER}"
+    SONAR_URL   = 'http://localhost:9000'
+    GITOPS_REPO = 'git@github.com:Mahendra0456/ecommerce-gitops.git'
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'rm -rf reports gitops application/node_modules && mkdir -p reports'
+      }
+    }
+
+    stage('Secret Scan (Gitleaks)') {
+      steps {
+        sh 'docker run --rm -v "$PWD":/repo zricethezav/gitleaks:latest detect --source /repo --no-git --redact --exit-code 1'
+      }
+    }
+
+    stage('Code Quality (SonarQube)') {
+      steps {
+        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+          sh '''
+            docker run --rm --network host \
+              -e SONAR_HOST_URL="$SONAR_URL" \
+              -e SONAR_TOKEN="$SONAR_TOKEN" \
+              -v "$PWD/application":/usr/src \
+              sonarsource/sonar-scanner-cli:latest \
+              -Dsonar.qualitygate.wait=true \
+              -Dsonar.qualitygate.timeout=300
+          '''
+        }
+      }
+    }
+
+    stage('Dependency Scan (OWASP Dependency-Check)') {
+      steps {
+        withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_KEY')]) {
+          sh '''
+            mkdir -p reports /var/lib/jenkins/dc-data
+            docker run --rm -u "$(id -u):$(id -g)" \
+              -v "$PWD/application":/src:ro \
+              -v "$PWD/reports":/report \
+              -v /var/lib/jenkins/dc-data:/usr/share/dependency-check/data \
+              owasp/dependency-check:latest \
+              --scan /src --format HTML --format JSON --out /report \
+              --project shopkart --nvdApiKey "$NVD_KEY" --failOnCVSS 9
+          '''
+        }
+      }
+      post {
+        always { archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true }
+      }
+    }
+
+    stage('Filesystem Scan (Trivy)') {
+      steps {
+        sh 'trivy fs --scanners vuln --severity CRITICAL --exit-code 1 --ignore-unfixed application/'
+      }
+    }
+
+    stage('Install and Test') {
+      steps {
+        sh '''
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
+            -v "$PWD/application":/app -w /app \
+            node:22-alpine sh -c "npm ci && npm test"
+        '''
+      }
+    }
+
+    stage('Docker Build') {
+      steps {
+        sh 'docker build -t "$IMAGE:$TAG" -f docker/Dockerfile .'
+      }
+    }
+
+    stage('Image Scan (Trivy)') {
+      steps {
+        sh 'trivy image --scanners vuln --severity CRITICAL --exit-code 1 --ignore-unfixed "$IMAGE:$TAG"'
+      }
+    }
+
+    stage('Push Image') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_TOKEN')]) {
+          sh '''
+            echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
+            docker push "$IMAGE:$TAG"
+            docker logout
+          '''
+        }
+      }
+    }
+
+    // Jenkins never touches the cluster. It only records the new image tag in Git;
+    // ArgoCD sees the commit and rolls the release out.
+    stage('Update GitOps Repo') {
+      steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'gitops-deploy-key', keyFileVariable: 'GIT_KEY')]) {
+          sh '''
+            set -e
+            export GIT_SSH_COMMAND="ssh -i $GIT_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+            rm -rf gitops
+            git clone "$GITOPS_REPO" gitops
+            cd gitops
+            sed -i "s|^  tag:.*|  tag: $TAG|" apps/ecommerce/values.yaml
+            git config user.email "jenkins@devops-server"
+            git config user.name "jenkins-ci"
+            git add apps/ecommerce/values.yaml
+            git commit -m "ci: deploy image tag $TAG"
+            git push origin main
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      sh 'docker image prune -f || true'
+    }
+    success {
+      echo "Image ${env.IMAGE}:${env.TAG} pushed and GitOps repo updated. ArgoCD deploys it from here."
+    }
+  }
+}

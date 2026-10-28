@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: incident-analyzer
+  namespace: monitoring
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-analyzer
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-analyzer
+  template:
+    metadata:
+      labels:
+        app: incident-analyzer
+    spec:
+      serviceAccountName: incident-analyzer
+      containers:
+        - name: analyzer
+          image: python:3.12-slim
+          # boto3 is only needed for the optional Bedrock summary; failure to install is ignored
+          command: ["sh", "-c", "pip install -q boto3 >/dev/null 2>&1 || true; exec python -u /app/analyze.py"]
+          env:
+            - name: ES_URL
+              value: "http://__ELK_IP__:9200"
+            - name: BEDROCK_MODEL_ID
+              value: ""
+            - name: BEDROCK_REGION
+              value: "ap-south-1"
+          ports:
+            - containerPort: 5000
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: code
+              mountPath: /app
+      volumes:
+        - name: code
+          configMap:
+            name: analyzer-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-analyzer
+  namespace: monitoring
+spec:
+  selector:
+    app: incident-analyzer
+  ports:
+    - port: 5000
+      targetPort: 5000

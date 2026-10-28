@@ -1,0 +1,15 @@
+title = "ShopKart gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated or third-party folders"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)\.git/''',
+  '''(^|/)reports/''',
+  '''(^|/)gitops/''',
+  '''(^|/)\.scannerwork/''',
+  '''(^|/)\.terraform/''',
+]
