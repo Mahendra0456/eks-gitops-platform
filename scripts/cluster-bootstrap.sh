@@ -39,7 +39,7 @@ sed "s/__ELK_IP__/$ELK_IP/g" monitoring/incident-analyzer.yaml | kubectl apply -
 
 echo "== 8/9 Argo Rollouts"
 kubectl create ns argo-rollouts --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+kubectl apply --server-side --force-conflicts -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
 
 echo "== 9/9 ArgoCD"
 kubectl create ns argocd --dry-run=client -o yaml | kubectl apply -f -
